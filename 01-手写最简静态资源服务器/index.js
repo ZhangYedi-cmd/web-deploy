@@ -1,9 +1,18 @@
-/**
- * @author Yedi Zhang --Tust
- * @date 2022/5/25 21:05
- * @email 178320369@qq.com
- */
+const http = require('http') // 引入http库
+// 返回的响应体内容
+const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title></title>
+</head>
+<body>
+  hello, ZYD. 
+</body>
+</html>`
 
-// 前端工程化
-
-
+const server = http.createServer((req, res) => res.end(html))
+// 将服务启动在3000端口
+server.listen(3000, () => {
+    console.log('Listening 3000')
+})

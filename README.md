@@ -213,4 +213,103 @@ services:
 docker-compose up --build
 ```
 
-![image-20220608204948431](C:\Users\Lenovo\AppData\Roaming\Typora\typora-user-images\image-20220608204948431.png)
+
+
+## 单页部署
+
+### docker缓存优化及多阶段构建
+
+我们以部署一个create-react-app为示例。 
+
+正常情况下使用docker部署：
+
+```dockerfile
+FROM node:alpine
+
+ADD . code 
+
+RUN yarn && npm install 
+
+RUN yarn build 
+
+CMD npx serve -s build
+
+EXPOSE 3000 
+```
+
+但是这样部署的问题点就是，每次我们修改代码，就会进行一次依赖的下载，这是没有任何必要的，可以从这个角度，来从时间上优化我们构建镜像的速度。 
+
+docker 是基于[联合文件系统](https://blog.csdn.net/weixin_45880055/article/details/118057568)的，每次执行ADD命令都会查看缓存是否可用， 如果文件内容改变，则会生成一个新的层。 
+
+上面的Dockerfile，我们每次修改代码，直接执行ADD命令， 那么这时候docker就会判断缓存是否可用, 此时，我们已经修改了代码，docker发现缓存是不可用的，那么就会重新执行命令。 
+
+#### 构建时间优化：构建缓存
+
+在本地环境中，如果没有新的 npm package 需要下载，不需要重新 npm i。
+
+ Dockerfile 中，对于 `ADD` 指令来讲，如果**添加文件内容的 `checksum` 没有发生变化，则可以利用构建缓存**。
+
+而对于前端项目而言，如果 `package.json/yarn.lock` 文件内容没有变更，则无需再次 `npm i`。
+
+将 `package.json/yarn.lock` 事先置于镜像中，安装依赖将可以获得缓存的优化，优化如下。
+
+```dockerfile
+FROM node:14-alpine as builder
+
+WORKDIR /code
+
+# 先将依赖目录转入到code目录 -- 判断这一层的文件是否和缓存相同
+ADD package.json package-lock.json /code/
+# 如果相同， yarn就不会执行  
+RUN yarn
+
+# 再将src下更新的代码cope到code目录下
+ADD . /code
+RUN yarn && npm run build # 打包
+CMD npx serve -s build
+
+EXPOSE 3000 
+```
+
+这样，如果没有新的依赖，则不会进行yarn 。 
+
+#### 构建体积优化：多阶段构建
+
+更小的镜像体积： nginx
+
+我们的静态资源，使用node进行服务会造成大量的资源浪费。node的镜像大概有100多MB， 而nginx只有23MB。 
+
+可以使用多阶段构建进行优化，最终使用nginx进行服务化
+
+```dockerfile
+FROM node:14-alpine as builder
+
+WORKDIR /code
+
+# 先将依赖目录转入到code目录 -- 判断这一层的文件是否和缓存相同
+ADD package.json package-lock.json /code/
+# 如果相同， yarn就不会执行
+RUN yarn
+
+# 再将src下更新的代码cope到code目录下
+ADD . /code
+RUN yarn && npm run build # 打包
+
+CMD npx serve -s build
+
+FROM nginx:alpine  # nginx 服务化
+COPY --from=builder code/build /usr/share/nginx/html
+```
+
+启动服务
+
+```yaml
+version: "3"
+services:
+  simple:
+    build:
+      context: .
+      dockerfile: simple.Dockerfile
+    ports:
+      - 4000:80
+```

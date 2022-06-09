@@ -156,3 +156,61 @@ $ docker-compose up --build
 此时在本地访问 `http://localhost:3000` 访问成功
 
 此时，通过 `docker`/`docker-compose` 便部署成功了第一个前端应用。
+
+#### 使用Nginx镜像来配置Docker
+
+为什么使用nginx部署前端项目？ 
+
++ 镜像大小， nginx：alpine 只有23MB的大小， 而node有123MB左右， 从镜像的体积上优化。 
++ 性能上的差异， node服务器自身没有实现像nginx服务器那样的负载均衡，缓存控制等一系列功能，而在Nginx中只需要开启配置即可。 非常方便。
+
+还是以我们之前的index.html为示例。 
+
+查看nginx配置文件： 
+
+```nginx
+server {
+    listen       80;
+    server_name  localhost;
+
+    location / {  
+        root   /usr/share/nginx/html; # 将请求映射到这个路径
+        index  index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+}
+```
+
+那么我们只需要将我们自己的index.html 放到/usr/share/nginx/html/ 即可
+
+DockerFile
+
+```dockerfile
+FROM nginx:alpine
+
+ADD index.html   /usr/share/nginx/html/
+```
+
+DockerCompose
+
+```yml
+version: "3"
+services:
+  app:
+    # build: 从当前路径构建镜像
+    build: .
+    ports:
+      - 3000:80
+```
+
+打包并运行容器
+
+```shell
+docker-compose up --build
+```
+
+![image-20220608204948431](C:\Users\Lenovo\AppData\Roaming\Typora\typora-user-images\image-20220608204948431.png)

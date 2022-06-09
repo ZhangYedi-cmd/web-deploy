@@ -273,6 +273,8 @@ EXPOSE 3000
 
 这样，如果没有新的依赖，则不会进行yarn 。 
 
+![image-20220609232250923](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220609232250923.png)
+
 #### 构建体积优化：多阶段构建
 
 更小的镜像体积： nginx

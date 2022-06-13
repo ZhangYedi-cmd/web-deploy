@@ -1,0 +1,20 @@
+version: "3"
+services:
+  app:
+    # build: 从当前路径构建镜像
+    build: .
+    ports:
+      - 8800:3000 # 本地服务映射到80端口
+
+  api:
+    image: shanyue/whoami
+    ports:
+      - 8888:3000
+
+  proxy:
+    image: nginx:alpine
+    ports:
+      - 8300:80
+    volumes:
+      - ./proxy.conf:/etc/nginx/conf.d/default.conf
+      - .:/usr/share/nginx/html

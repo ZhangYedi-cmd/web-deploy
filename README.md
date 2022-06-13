@@ -315,3 +315,203 @@ services:
     ports:
       - 4000:80
 ```
+
+但是这样有一个问题点，页面刷新之后会变成404页面。 
+
+道理也很简单，我们的react应用是通过nginx部署的，当我们点击页面上的按钮进行跳转时，是通过React-router控制的，这就不会引起404错误。 但是当我们刷新页面时，nginx会判断我们的请求，我们没有为/about路由配置访问的资源，所以会导致404错误。 
+
+解决方法：使用try_files解决，让react-router来处理我们的请求。 
+
+```nginx
+location / {
+    # 解决单页应用服务端路由的问题
+    try_files  $uri $uri/ /index.html;
+}
+```
+
+这个过程：请求/about时，将请求打到index.html ，让index.html来处理/about，即可实现页面的跳转。 
+
+### nginx配置长期缓存优化
+
+我之前部署前端项目时的nginx配置：
+
+```nginx
+ server {
+        listen       80;         #默认的web访问端口
+        server_name  127.0.0.1;     #服务器名
+           
+		location ~/imaker {
+      	 	root /home/imakervue; 
+    	}
+    	#   静态资源代理
+     	location /static {
+        	 alias  /home/imakerstatic/static/;
+     	}
+}
+```
+
+现在回过来看，这个nginx配置中的/static没有太大的意义，单独分离出一个path去接受请求并为对系统的性能做到一定的提升。 
+
+现在我们可以通过nginx配置http缓存来减轻服务器的压力。 
+
+以打包出来的react应用为例，打包后的资源主要是静态资源和非静态资源。静态资源在进行打包时webpack会默认在文件名后面加一个hash值。
+
+![image-20220613125444792](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613125444792.png)
+
+对于这些带hash的静态资源我们可以为其设置缓存，因为当服务端的资源更新时，hash值一定是不一样的，此时客户端就会去请求服务器引用新的资源。 
+
+对于非hash资源（例如index.html），我们不能为其设置缓存，因为当服务端更新index.html时，假设客户端还有缓存时，就不能请求到新的资源，在其中引用的静态资源也全部是过期的，这会导致很严重的问题。 
+
+nginx配置： 
+
+```nginx
+server {
+    listen       80;
+    server_name  localhost;
+
+    root   /usr/share/nginx/html;
+    index  index.html index.htm;
+
+    location / {
+        # 解决单页应用服务端路由的问题
+        try_files  $uri $uri/ /index.html;
+
+        # 非带 hash 的资源，需要配置 Cache-Control: no-cache，避免浏览器默认为强缓存
+        expires -1;
+    }
+
+    location /static {
+        # 带 hash 的资源，需要配置长期缓存
+        expires 1y;
+    }
+}
+```
+
+启动容器，现在访问静态资源已经设置为强缓存
+
+![image-20220613130402375](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613130402375.png)
+
+非静态资源，不会进行缓存
+
+![image-20220613130540632](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613130540632.png)
+
+### docker+Nginx部署express应用
+
+接下来我们部署一个express服务和一个whoami服务。 
+
+```js
+/**
+ * @author Yedi Zhang --Tust
+ * @date 2022/6/13 8:50
+ * @email 178320369@qq.com
+ */
+
+const express = require("express");
+
+const app = express();
+
+app.get("/api1/hello", (req, res) => {
+    res.send("hello zyd!")
+})
+
+app.listen(3000, () => {
+    console.log(`Example app listening on port 3000 🚀`)
+})
+```
+
+这个案例折腾了半天，原因就是对docker认识上的错误，想要通过一个dockerfile实现nginx请求转发。 
+
+错误的示例：
+
+Dockerfile：  
+
+```dockerfile
+FROM node:14-alpine as builder
+
+ADD package.json package-lock.json /code/
+
+RUN yarn
+
+WORKDIR code
+
+ADD . /code
+
+CMD node index.js
+
+EXPOSE 3000
+
+FROM nginx:alpine  # 再次FROM时，会在一个新的容器操作，两个环境之间是隔离的，所以这个容器中是访问不到上个容器中部署的服务的！
+
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+```
+
+nginx.conf： 
+
+```nginx
+server {
+  listen       80;
+  server_name  localhost;
+
+
+  location /api {
+    proxy_pass   http://localhost:3000;
+  }
+
+}
+```
+
+正确的做法是通过docker-compose部署，在docker-compose配置文件中声明多个服务。这其中就包括了一个nginx服务和一个express服务。
+
+docker-compose.yaml 
+
+```yaml
+version: "3"
+services:
+  app:
+    # build: 从当前路径构建镜像
+    build: .
+    ports:
+      - 8800:3000 # 本地服务映射到80端口
+
+  api:  # 山月老师的一个服务
+    image: shanyue/whoami
+    ports:
+      - 8888:3000
+
+  proxy:
+    image: nginx:alpine
+    ports:
+      - 8300:80
+    volumes:
+      - ./proxy.conf:/etc/nginx/conf.d/default.conf
+      - .:/usr/share/nginx/html
+```
+
+在proxy.conf中，实现请求的转发： 
+
+```nginx
+server {
+  listen       80;
+  server_name  localhost;
+
+  location /api1 {
+    proxy_pass   http://app:3000; # app即是我们的express应用
+  }
+    
+   location /api2 {
+       proxy_pass   http://api:3000;
+    }
+}
+```
+
+配置完成，运行容器：
+
+```shell
+docker-compose up --build
+```
+
+![image-20220613132447169](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613132447169.png)
+
+通过以上的示例，我们成功在一个容器中部署了两个应用和一个Nginx服务。
+
+![image-20220613132230152](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613132230152.png)

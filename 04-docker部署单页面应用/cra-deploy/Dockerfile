@@ -14,5 +14,5 @@ RUN yarn && npm run build # 打包
 CMD npx serve -s build
 
 FROM nginx:alpine
-
+ADD nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder code/build /usr/share/nginx/html

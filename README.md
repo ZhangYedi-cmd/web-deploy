@@ -515,3 +515,359 @@ docker-compose up --build
 通过以上的示例，我们成功在一个容器中部署了两个应用和一个Nginx服务。
 
 ![image-20220613132230152](https://xingqiu-tuchuang-1256524210.cos.ap-shanghai.myqcloud.com/886/image-20220613132230152.png)
+
+
+
+
+
+## 对象存储
+
+为什么需要对象存储服务？为什么我们需要将资源放到cdn上？ 
+
+我用一个字来回答：快！通过配置OSS服务，我们可以将我们的资源放到全国各地的CDN服务器上，从而减少请求响应的速度，使系统整体的性能提升。 
+
+常见的对象存储服务有阿里云的OSS，腾讯云的COS等， 这里我们使用OSS对象存储，将我们之前写的react应用的静态资源放到OSS服务上。 
+
+
+
+### 预先准备
+
++ 在阿里云官网开通oss对象存储服务
++ 新建一个buket来存放我们的静态资源
++ 制定服务器的ip进行跨域
++ 申请access-key-id / access-key-secret
+
+
+
+### 配置Webpack: pulicPath 
+
+在webpack配置文件中，设置pubicPath：
+
+```js
+moudel.export = {
+  output : {
+    pubicPath: "$Bucket.$Endpoint"
+  }
+}
+```
+
+这里的pubicPath为oss服务的域名。 
+
+但是我们使用的cra脚手架对webpack进行了进一步的封装，我们需要在项目目录下新建.env文件来配置publicPath环境变量。 
+
+```
+PUBLIC_URL=https://webdeploy.oss-cn-beijing.aliyuncs.com
+```
+
+这样，我们打包出来的index.html引用的静态资源就是从oss服务上引用的。 
+
+### 安装ossUtils
+
+ossutils 是阿里云oss官方所推出的一个脚手架工具。 
+
+在 OSS 上创建一个 Bucket，通过官方工具 [ossutil (opens new window)](https://help.aliyun.com/document_detail/50452.html)将静态资源上传至 OSS。
+
+- [ossutil 安装(opens new window)](https://help.aliyun.com/document_detail/120075.htm)
+- [ossutil 文档(opens new window)](https://help.aliyun.com/document_detail/50452.html)
+
+在进行资源上传之前，需要通过 `ossutil config` 进行权限配置。
+
+```bash
+# 在该命令中我将 key/secret/endpoint 使用环境变量进行维护
+# 如果没有使用环境变量维护，请手动替换 key/secret/endpoint
+$ ossutil config -i $ACCESS_KEY_ID -k $ACCESS_KEY_SECRET -e $ENDPOINT
+```
+
+命令 `ossutil cp` 可将本地资源上传至 OSS。而缓存策略与前篇文章保持一致:
+
+1. 带有 hash 的资源一年长期缓存
+2. 非带 hash 的资源，需要配置 Cache-Control: no-cache，**避免浏览器默认为强缓存**
+
+```bash
+# 将本地目录 build 上传到 Bucket oss://shanyue-cra 中
+# --meta: 配置响应头，也就是这里的缓存策略
+# build: 本地静态资源目录
+# oss://shanyue-cra/: bucket 名字
+$ ossutil cp -rf --meta Cache-Control:no-cache build oss://shanyue-cra/
+
+# 将带有 hash 资源上传到 OSS Bucket，并且配置长期缓存
+# 注意此时 build/static 上传了两遍 (可通过脚本进行优化)
+$ ossutil cp -rf --meta Cache-Control:max-age=31536000 build/static oss://shanyue-cra/static
+```
+
+为求方便，可将两条命令维护到 `npm scripts` 中
+
+```js
+{
+  scripts: {
+    'oss:cli': 'ossutil cp -rf --meta Cache-Control:no-cache build oss://shanyue-cra/ && ossutil cp -rf --meta Cache-Control:max-age=31536000 build/static oss://shanyue-cra/static'
+  }
+}
+```
+
+### OSS : script 上传静态资源
+
+另有一种方法，通过官方提供的 SDK: [ali-oss (opens new window)](https://github.com/ali-sdk/ali-oss)可对资源进行精准控制:
+
++ p-queue 并发控制
++ 按需上传
+
+在package.json 中配置脚本：
+
+```json
+"scripts": {
+  ...
+  "oss:script": "node scripts/ossUpload.mjs",
+  ...
+},
+```
+
+脚本这里暂且不提，在后续我们会详细分析。 
+
+#### Docker
+
+由于dockerFile同代码进行一起管理，我们不能将敏感信息写入dockerFile , 所以我们可以通过配置宿主机的环境变量来向docker-compose传参。 
+
+配置环境变量(以macos示例)：
+
+```shell
+vim ~/.bash_profile 
+## 添加以下环境变量
+
+###
+source ～/.bash_file 
+printenv  # 查看已配置的环境变量
+```
+
+添加以下环境变量
+
+```shell
+export PUBLIC_URL=https://webdeploy.oss-cn-beijing.aliyuncs.com
+export ACCESS_KEY_ID=xxxxxx
+export ACCESS_KEY_SECRET=xxxx
+```
+
+Docker-compose: 
+
+```yaml
+version: "3"
+services:
+  oss:
+    build:
+      context: .
+      dockerfile: oss.Dockerfile
+      args:
+        # 此处默认从宿主机(host)环境变量中传参，在宿主机中需要提前配置 ACCESS_KEY_ID/ACCESS_KEY_SECRET 环境变量
+        - ACCESS_KEY_ID
+        - ACCESS_KEY_SECRET
+        - ENDPOINT=oss-cn-beijing.aliyuncs.com
+    ports:
+      - 8000:80
+```
+
+dockerfile : 
+
+```dockerfile
+FROM node:14-alpine as builder
+
+# docker-compose 传入的参数
+ARG ACCESS_KEY_ID
+ARG ACCESS_KEY_SECRET
+ARG ENDPOINT
+ENV PUBLIC_URL https://webdeploy.oss-cn-beijing.aliyuncs.com
+
+WORKDIR /code
+
+# 为了更好的缓存，把它放在前边
+RUN wget http://gosspublic.alicdn.com/ossutil/1.7.7/ossutil64 -O /usr/local/bin/ossutil \
+  && chmod 755 /usr/local/bin/ossutil \
+  && ossutil config -i $ACCESS_KEY_ID -k $ACCESS_KEY_SECRET -e $ENDPOINT
+
+# 单独分离 package.json，是为了安装依赖可最大限度利用缓存
+ADD package.json package-lock.json /code/
+RUN npm install
+
+ADD . /code
+# 这里通过脚本上传
+RUN npm run build && npm run oss:cli
+
+# 选择更小体积的基础镜像
+FROM nginx:alpine
+ADD nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder code/build /usr/share/nginx/html
+```
+
+
+
+### OSS:Script上传时时间和空间上优化
+
++ 并发控制
++ 按需上传
++ 删除冗余资源
+
+在前端构建中无时不刻存在着缓存
+
++ 当源文件未发生改变时，将不会对moudel 使用 loader 重新进行编译，这是利用了webpack中的持久化缓存
++ 文件内容未发生改变时，将不会产生新的hash值，这样有利于HTTP Long Term Cache 。
+
+那么将云端文件的hash值和本地文件的hash值进行对比，**如果hash值相同，则说明文件的内容并没有改变，则不对其进行上传，这一步将减少文件上传的时间，从而提升部署的速度**
+
+按需上传，伪代码如下： 
+
+```js
+async function isExist(Filename) { 
+  try {
+    await client.isExist(FileName) 
+    return true
+  } catch (e) { 
+    console.log(e)
+    return false 
+  } 
+}
+```
+
+对于其是否含有hash值，分别进行缓存控制： 
+
+```js
+async function uploadFile (objectName, withHash) { 
+  const file = resolve('./build', ObjectName); 
+  // 对于静态资源，查看oss服务器是否有相同的文件
+  const exist = withHash ? await isExistObject(objectName):false ; 
+	if (!exist) {
+ 	  // 针对静态资源和非静态资源，进行缓存控制
+		const cacheControl = withHash ? 'max-age=31536000' : 'no-cache';
+   	// 上传
+    await client.putStream(objectName, createReadStream(file), {
+            headers: {
+                'Cache-Control': cacheControl
+            }
+        })
+        console.log(`Done: ${objectName}`)
+  } else {
+  		// 如果该文件在 OSS 已存在，则跳过该文件 (Object)
+        console.log(`Skip: ${objectName}`)  
+  }
+}
+
+```
+
+另外，我们可以通过p-queue控制并发数。 
+
+```js
+for await (const entry of readdirp('./build', {depth: 0, type: 'files'})) {
+    queue.add(() => uploadFile(entry.path))
+    // uploadFile(entry.path)
+}
+```
+
+### RClone按需上传
+
+[Rclone (opens new window)](https://github.com/rclone/rclone)，`rsync for cloud storage`，是使用 Go 语言编写的一款高性能云文件同步的命令行工具，可理解为云存储版本的 rsync，或者更高级的 ossutil。
+
+它支持以下功能:
+
+1. 按需复制，每次仅仅复制更改的文件
+2. 断点续传
+3. 压缩传输
+
+[*配置Rclone*](https://developer.aliyun.com/article/749107)
+
+``` 
+[webdep]
+type = s3
+provider = Alibaba
+access_key_id = xxxxx
+secret_access_key = xxxxx
+endpoint = oss-cn-beijing.aliyuncs.com
+acl = private
+```
+
+通过rclone上传资源
+
+``` shell
+# 上传非hash资源
+rclone copy --exclude 'static/**' --header 'Cache-Control: no-cache' build webdep:/webdeploy --progress 
+
+# 上传hash资源。
+rclone copy --header  'Cache-Control: max-age=31536000' build/static webdep:/webdeploy/static --progress
+
+```
+
+其中webdep是我们本地rclone配置的仓库， 而webdepoy是oss远程的pocket地址。 
+
+为了更加便捷，我们可以在npm-script中配置rclone上传命令。 
+
+```json
+"scripts":{
+   "oss:rclone": "rclone copy --exclude 'static/**' --header 'Cache-Control: no-cache' build webdep:/webdeploy --progress && rclone copy --header  'Cache-Control: max-age=31536000' build/static webdep:/webdeploy/static --progress",
+}
+```
+
+
+
+### 删除OSS冗余资源
+
+在生产环境中，OSS只需要保存最后一次打包的代码即可。 每次打包出来的文件都是不一样的，这样问题点就是不必要的资源会越来越多，造成空间上的浪费。 
+
+可以在上线代码之后，将OSS仓库的文件和本地文件进行对比，如果文件名是不相同的，则删除仓库文件。 
+
+此时可根据 OSS 中所有资源与最后一次构建生成的资源一一对比文件名，进行删除。
+
+```js
+// 列举出来最新被使用到的文件: 即当前目录
+// 列举出来OSS上的所有文件，遍历判断该文件是否在当前目录，如果不在，则删除
+async function main() {
+  const files = await getCurrentFiles()
+  const objects = await getAllObjects()
+  for (const object of objects) {
+    // 如果当前目录中不存在该文件，则该文件可以被删除
+    if (!files.includes(object.name)) {
+      await client.delete(object.name)
+      console.log(`Delete: ${object.name}`)
+    }
+  }
+}
+```
+
+通过 npm scripts 进行简化:
+
+```js
+{
+  "scripts": {
+    "oss:prune": "node scripts/deleteOSS.mjs"
+  }
+}
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -6,15 +6,22 @@
     "@testing-library/jest-dom": "^5.16.4",
     "@testing-library/react": "^13.3.0",
     "@testing-library/user-event": "^13.5.0",
+    "ali-oss": "^6.17.1",
+    "p-queue": "^7.2.0",
     "react": "^18.1.0",
     "react-dom": "^18.1.0",
     "react-scripts": "5.0.1",
+    "readdirp": "^3.6.0",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts ../../05-oss静态资源控制/oss-deploy/build",
+    "build": "react-scripts build",
     "test": "react-scripts test",
+    "oss:script": "node scripts/ossUpload.mjs",
+    "oss:rclone": "rclone copy --exclude 'static/**' --header 'Cache-Control: no-cache' build webdep:/webdeploy --progress && rclone copy --header  'Cache-Control: max-age=31536000' build/static webdep:/webdeploy/static --progress",
+    "oss:cli": "ossutil cp -rf --meta Cache-Control:no-cache build oss://webdeploy/ && ossutil cp -rf --meta Cache-Control:max-age=31536000 build/static oss://webdeploy/static",
+    "oss:prune": "node scripts/deleteOSS.mjs",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {

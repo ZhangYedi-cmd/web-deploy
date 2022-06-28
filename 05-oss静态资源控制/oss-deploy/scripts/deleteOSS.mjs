@@ -3,7 +3,7 @@ import readdirp from 'readdirp'
 
 // 该文件用于定时任务周期性删除 OSS 上的冗余资源，可通过 CRON 配置每天凌晨两点进行删除
 // 由于该脚本定时完成，所以无需考虑性能问题，故不适用 p-queue 进行并发控制
-
+// env
 const client = new OSS({
   region: 'oss-cn-beijing',
   accessKeyId: process.env.ACCESS_KEY_ID,

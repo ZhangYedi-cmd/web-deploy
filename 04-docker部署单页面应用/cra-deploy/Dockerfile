@@ -9,10 +9,10 @@ RUN npm install
 
 # 再将src下更新的代码cope到code目录下
 ADD . /code
-RUN  npm run build # 打包
-
-CMD npx serve -s build
+RUN npm run build # 打包
 
 FROM nginx:alpine
+
 ADD nginx.conf /etc/nginx/conf.d/default.conf
+
 COPY --from=builder code/build /usr/share/nginx/html

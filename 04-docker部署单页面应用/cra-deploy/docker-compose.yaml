@@ -1,7 +1,8 @@
 version: "3"
 services:
   app:
-    # build: 从当前路径构建镜像
-    build: .
+    build:
+      context: .
+      dockerfile: simple.Dockerfile
     ports:
       - 3000:80 # 本地服务映射到80端口
